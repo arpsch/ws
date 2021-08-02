@@ -12,11 +12,36 @@ import (
 
 const MAX_UPLOAD_SIZE = 1024 * 1024 * 8 // 8MB
 
-func Index(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, "Welcome!\n")
+func readAuthToken() string {
+	at := os.Getenv("AUTH_TOKEN")
+	if at != "" {
+		return at
+	}
+	return "SecretToken"
 }
 
-func fileUploadRequestHandler(w http.ResponseWriter, r *http.Request) {
+func IndexHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// set the auth cookie
+	expire := time.Now().Add(3 * time.Second)
+	cookie := http.Cookie{
+		Name:    "auth",
+		Value:   readAuthToken(),
+		Expires: expire,
+		Path:    "/",
+	}
+	http.SetCookie(w, &cookie)
+
+	if r.URL.Path == "/" {
+		http.ServeFile(w, r, "public/index.html")
+	}
+}
+
+func FileUploadRequestHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -27,7 +52,12 @@ func fileUploadRequestHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	auth := r.FormValue("auth")
 
+	if auth != readAuthToken() {
+		http.Error(w, errors.New("authentication is failed").Error(), http.StatusForbidden)
+		return
+	}
 	// read the file header
 	_, fh, err := r.FormFile("data")
 

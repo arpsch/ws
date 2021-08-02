@@ -5,8 +5,19 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/joho/godotenv"
+
 	route "ws/api/http"
 )
+
+func init() {
+	// load .env file
+	err := godotenv.Load(".env")
+
+	if err != nil {
+		log.Fatalf("Error loading .env file")
+	}
+}
 
 func readServerPort() string {
 	p := os.Getenv("PORT")
