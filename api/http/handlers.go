@@ -1,16 +1,37 @@
 package http
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"time"
+	"ws/app"
+	"ws/logger"
+
+	"github.com/julienschmidt/httprouter"
 )
 
 const MAX_UPLOAD_SIZE = 1024 * 1024 * 8 // 8MB
+
+type appHandlers struct {
+	app app.ImageCollectorApp
+}
+
+func NewAppHandlers(ic app.ImageCollectorApp) *appHandlers {
+	return &appHandlers{
+		app: ic,
+	}
+}
+
+func (ah *appHandlers) SetupRoutes() *httprouter.Router {
+	router := httprouter.New()
+	router.HandlerFunc("GET", "/", logger.Log(ah.IndexHandler))
+	router.HandlerFunc("POST", "/upload", logger.Log(ah.FileUploadRequestHandler))
+
+	return router
+}
 
 func readAuthToken() string {
 	at := os.Getenv("AUTH_TOKEN")
@@ -20,7 +41,7 @@ func readAuthToken() string {
 	return "SecretToken"
 }
 
-func IndexHandler(w http.ResponseWriter, r *http.Request) {
+func (ah *appHandlers) IndexHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -41,7 +62,10 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func FileUploadRequestHandler(w http.ResponseWriter, r *http.Request) {
+func (ah *appHandlers) FileUploadRequestHandler(w http.ResponseWriter, r *http.Request) {
+
+	ctx := context.Background()
+
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -54,12 +78,18 @@ func FileUploadRequestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	auth := r.FormValue("auth")
 
+	fmt.Printf("############### AUTH TOKEN %s ##################\n", auth)
+
 	if auth != readAuthToken() {
 		http.Error(w, errors.New("authentication is failed").Error(), http.StatusForbidden)
 		return
 	}
 	// read the file header
 	_, fh, err := r.FormFile("data")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	if fh == nil {
 		http.Error(w, errors.New("failed to read file header").Error(), http.StatusBadRequest)
@@ -72,53 +102,7 @@ func FileUploadRequestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// read the content of uploaded file
-	upFile, err := fh.Open()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	defer upFile.Close()
-
-	buff := make([]byte, 512)
-	_, err = upFile.Read(buff)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// identify the content type for -JPEG or PNG
-	fileType := http.DetectContentType(buff)
-	if fileType != "image/jpeg" && fileType != "image/png" {
-		http.Error(w, "The provided file format is not allowed. Please upload a JPEG or PNG image", http.StatusBadRequest)
-		return
-	}
-
-	// reset the pointer back to start of the file
-	_, err = upFile.Seek(0, io.SeekStart)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// store all the uploaded files under files folder
-	err = os.MkdirAll("./files", os.ModePerm)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// create a destination file - .fileNameTime
-	saveFile, err := os.Create(fmt.Sprintf("./files/%s%d", filepath.Ext(fh.Filename), time.Now().UnixNano()))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	defer saveFile.Close()
-
-	_, err = io.Copy(saveFile, upFile)
+	err = ah.app.AddImageInformation(ctx, fh)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
